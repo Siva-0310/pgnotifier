@@ -2,58 +2,129 @@ package pgnotifier
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestListener(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func setupTestNotifier(t *testing.T) (Notifier, *pgxpool.Pool, func()) {
+	ctx := context.Background()
 
-	connString := "postgresql://user:password@localhost:5432/alerts"
+	// Replace with your PostgreSQL connection string
+	connString := "postgres://user:password@localhost:5432/alerts"
+
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		t.Fatalf("Unable to connect to database: %v", err)
 	}
-	defer pool.Close()
 
-	listener, err := New(ctx, "coins_update", pool)
+	notifier, err := New(ctx, pool)
 	if err != nil {
-		t.Fatalf("Failed to create listener: %v", err)
-	}
-	defer listener.Close() // Ensure the listener is closed after the test
-
-	notificationChannel := listener.NotificationChannel()
-
-	// Start listening in blocking mode
-	listener.Listen(ctx)
-	go listener.Blocking(ctx)
-
-	_, err = pool.Exec(ctx, "NOTIFY coins_update, 'test_payload'")
-	if err != nil {
-		t.Fatalf("Failed to send notification: %v", err)
+		t.Fatalf("Failed to create notifier: %v", err)
 	}
 
-	timeoutCtx, timeoutCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer timeoutCancel()
+	// Cleanup function
+	cleanup := func() {
+		notifier.Close(ctx)
+		pool.Close()
+	}
 
-	// Wait for notification
+	return notifier, pool, cleanup
+}
+
+func TestNotifierBlocking(t *testing.T) {
+	notifier, pool, cleanup := setupTestNotifier(t)
+	defer cleanup()
+
+	// Test Listen
+	t.Log("Calling Listen")
+	err := notifier.Listen(context.Background(), "test_channel")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	t.Log("Listen succeeded")
+
+	// Test Blocking
+	t.Log("Starting Blocking in a goroutine")
+	go func() {
+		err := notifier.Blocking(context.Background())
+		if err != nil {
+			t.Errorf("Blocking failed: %v", err)
+		}
+		t.Log("Blocking finished")
+	}()
+
+	// Simulate sending a notification to the channel
+	t.Log("Sending notification to the channel")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = pool.Exec(ctx, "NOTIFY test_channel, 'test_payload'")
+	if err != nil {
+		t.Fatalf("Sending notification failed: %v", err)
+	}
+
+	t.Log("Waiting for notification")
 	select {
-	case notification := <-notificationChannel:
-		if notification == nil {
-			t.Fatal("Expected notification but got nil")
-		}
-		if notification.Payload != "test_payload" {
-			t.Errorf("Expected payload 'test_payload', got '%s'", notification.Payload)
-		}
-		fmt.Println(notification.Payload)
-	case <-timeoutCtx.Done():
-		t.Fatal("Test timed out waiting for notification")
+	case notification := <-notifier.NotificationChannel():
+		assert.Equal(t, "test_payload", notification.Payload)
+		t.Log("Received notification successfully")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for notification")
 	}
 
-	fmt.Println("Test completed successfully")
-	cancel()
+	// Test UnListen
+	t.Log("Calling UnListen")
+	err = notifier.UnListen(context.Background(), "test_channel")
+	if err != nil {
+		t.Fatalf("UnListen failed: %v", err)
+	}
+	t.Log("UnListen succeeded")
+}
+
+func TestNotifierNonBlocking(t *testing.T) {
+	notifier, pool, cleanup := setupTestNotifier(t)
+	defer cleanup()
+
+	// Test Listen
+	t.Log("Calling Listen")
+	err := notifier.Listen(context.Background(), "test_channel")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	t.Log("Listen succeeded")
+
+	// Test NonBlocking
+	t.Log("Starting NonBlocking")
+	notifier.NonBlocking(context.Background())
+	t.Log("NonBlocking started")
+
+	// Simulate sending a notification to the channel
+	t.Log("Sending notification to the channel")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = pool.Exec(ctx, "NOTIFY test_channel, 'test_payload'")
+	if err != nil {
+		t.Fatalf("Sending notification for non-blocking failed: %v", err)
+	}
+
+	t.Log("Waiting for non-blocking error")
+	select {
+	case notification := <-notifier.NotificationChannel():
+		assert.Equal(t, "test_payload", notification.Payload)
+		t.Log("Received notification successfully")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for notification")
+	}
+
+	// Test UnListen
+	t.Log("Calling UnListen")
+	err = notifier.UnListen(context.Background(), "test_channel")
+	if err != nil {
+		t.Fatalf("UnListen failed: %v", err)
+	}
+	t.Log("UnListen succeeded")
 }

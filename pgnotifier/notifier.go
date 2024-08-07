@@ -9,8 +9,8 @@ import (
 )
 
 type Notifier interface {
-	Listen(ctx context.Context) error
-	UnListen(ctx context.Context) error
+	Listen(ctx context.Context, topic string) error
+	UnListen(ctx context.Context, topic string) error
 	Blocking(ctx context.Context) error
 	NonBlocking(ctx context.Context)
 	Wait(ctx context.Context) (*pgconn.Notification, error)
@@ -20,7 +20,6 @@ type Notifier interface {
 }
 
 type notifier struct {
-	channel         string
 	conn            *pgxpool.Conn
 	notifierChannel chan *pgconn.Notification
 	mu              sync.Mutex
@@ -28,47 +27,47 @@ type notifier struct {
 	errorChannel    chan error
 }
 
-func New(ctx context.Context, channel string, pool *pgxpool.Pool) (Notifier, error) {
+func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return nil, err
 	}
 	return &notifier{
-		channel:         channel,
 		conn:            conn,
 		notifierChannel: make(chan *pgconn.Notification),
 		mu:              sync.Mutex{},
-		cancel:          make(chan struct{}, 1),
 		errorChannel:    make(chan error, 1),
+		cancel:          make(chan struct{}, 1),
 	}, nil
 }
 
-func (n *notifier) Listen(ctx context.Context) error {
+func (n *notifier) Listen(ctx context.Context, topic string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	_, err := n.conn.Conn().Exec(ctx, "LISTEN "+n.channel)
+	_, err := n.conn.Conn().Exec(ctx, "LISTEN "+topic)
 	return err
 }
 
 func (n *notifier) Blocking(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+
 	for {
+
+		notification, err := n.conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		n.notifierChannel <- notification
 		select {
 		case <-n.cancel:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-			notification, err := n.conn.Conn().WaitForNotification(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return err
-			}
-			n.notifierChannel <- notification
 		}
 	}
 }
@@ -80,13 +79,16 @@ func (n *notifier) NonBlocking(ctx context.Context) {
 	}()
 }
 
-func (n *notifier) UnListen(ctx context.Context) error {
+func (n *notifier) UnListen(ctx context.Context, topic string) error {
+
 	n.cancel <- struct{}{}
+
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	_, err := n.conn.Conn().Exec(ctx, "UNLISTEN "+n.channel)
+	_, err := n.conn.Exec(ctx, "UNLISTEN \""+topic+"\"")
 	return err
+
 }
 
 func (n *notifier) Wait(ctx context.Context) (*pgconn.Notification, error) {
@@ -106,15 +108,12 @@ func (n *notifier) ErrorChannel() chan error {
 
 func (n *notifier) Close(ctx context.Context) error {
 
-	if err := n.UnListen(ctx); err != nil {
-		return err
-	}
+	n.cancel <- struct{}{}
 
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	close(n.notifierChannel)
-	close(n.cancel)
 	close(n.errorChannel)
 
 	if err := n.conn.Conn().Close(ctx); err != nil {
