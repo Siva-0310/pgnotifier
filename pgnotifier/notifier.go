@@ -8,17 +8,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Notifier defines the interface for notification handling.
 type Notifier interface {
+	// Listen subscribes to notifications on the specified topic.
 	Listen(ctx context.Context, topic string) error
+
+	// UnListen unsubscribes from notifications on the specified topic.
 	UnListen(ctx context.Context, topic string) error
+
+	// Blocking blocks until a notification is received or the context is canceled.
 	Blocking(ctx context.Context) error
+
+	// NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
 	NonBlocking(ctx context.Context)
+
+	// Wait waits for a single notification. It returns the notification or an error if one occurs.
 	Wait(ctx context.Context) (*pgconn.Notification, error)
+
+	// NotificationChannel returns a channel for receiving notifications.
 	NotificationChannel() chan *pgconn.Notification
+
+	// ErrorChannel returns a channel for receiving errors.
 	ErrorChannel() chan error
+
+	// Close closes the notifier, unsubscribing from all topics and releasing resources.
 	Close(ctx context.Context) error
 }
 
+// notifier implements the Notifier interface for handling PostgreSQL notifications.
 type notifier struct {
 	conn            *pgxpool.Conn
 	notifierChannel chan *pgconn.Notification
@@ -27,6 +44,7 @@ type notifier struct {
 	errorChannel    chan error
 }
 
+// New creates a new notifier instance using the provided connection pool.
 func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -41,6 +59,7 @@ func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 	}, nil
 }
 
+// Listen subscribes to notifications on the specified topic.
 func (n *notifier) Listen(ctx context.Context, topic string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -49,12 +68,14 @@ func (n *notifier) Listen(ctx context.Context, topic string) error {
 	return err
 }
 
+// Blocking blocks until a notification is received or the context is canceled.
+// Notifications are sent to the notifierChannel, and the method returns
+// an error if one occurs or the context is canceled.
 func (n *notifier) Blocking(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
 	for {
-
 		notification, err := n.conn.Conn().WaitForNotification(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -72,6 +93,8 @@ func (n *notifier) Blocking(ctx context.Context) error {
 	}
 }
 
+// NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
+// Any errors encountered are sent to the errorChannel.
 func (n *notifier) NonBlocking(ctx context.Context) {
 	go func() {
 		err := n.Blocking(ctx)
@@ -79,8 +102,9 @@ func (n *notifier) NonBlocking(ctx context.Context) {
 	}()
 }
 
+// UnListen unsubscribes from notifications on the specified topic.
+// It also signals cancellation to any running blocking operations.
 func (n *notifier) UnListen(ctx context.Context, topic string) error {
-
 	n.cancel <- struct{}{}
 
 	n.mu.Lock()
@@ -88,9 +112,9 @@ func (n *notifier) UnListen(ctx context.Context, topic string) error {
 
 	_, err := n.conn.Exec(ctx, "UNLISTEN \""+topic+"\"")
 	return err
-
 }
 
+// Wait waits for a single notification. It returns the notification or an error if one occurs.
 func (n *notifier) Wait(ctx context.Context) (*pgconn.Notification, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -98,16 +122,19 @@ func (n *notifier) Wait(ctx context.Context) (*pgconn.Notification, error) {
 	return n.conn.Conn().WaitForNotification(ctx)
 }
 
+// NotificationChannel returns a channel for receiving notifications.
 func (n *notifier) NotificationChannel() chan *pgconn.Notification {
 	return n.notifierChannel
 }
 
+// ErrorChannel returns a channel for receiving errors.
 func (n *notifier) ErrorChannel() chan error {
 	return n.errorChannel
 }
 
+// Close closes the notifier, unsubscribing from all topics and releasing resources.
+// It signals cancellation to any running blocking operations, closes channels, and releases the connection.
 func (n *notifier) Close(ctx context.Context) error {
-
 	n.cancel <- struct{}{}
 
 	n.mu.Lock()
@@ -122,5 +149,4 @@ func (n *notifier) Close(ctx context.Context) error {
 
 	n.conn.Release()
 	return nil
-
 }
