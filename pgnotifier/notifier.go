@@ -39,7 +39,7 @@ func New(ctx context.Context, channel string, pool *pgxpool.Pool) (Notifier, err
 		notifierChannel: make(chan *pgconn.Notification),
 		mu:              sync.Mutex{},
 		cancel:          make(chan struct{}, 1),
-		errorChannel:    make(chan error),
+		errorChannel:    make(chan error, 1),
 	}, nil
 }
 
@@ -109,6 +109,9 @@ func (n *notifier) Close(ctx context.Context) error {
 	if err := n.UnListen(ctx); err != nil {
 		return err
 	}
+
+	n.mu.Lock()
+	defer n.mu.Unlock()
 
 	close(n.notifierChannel)
 	close(n.cancel)
