@@ -11,27 +11,46 @@ import (
 // Notifier defines the interface for notification handling.
 type Notifier interface {
 	// Listen subscribes to notifications on the specified topic.
+	// It begins listening for notifications on the given topic.
+	// Returns an error if the subscription fails.
 	Listen(ctx context.Context, topic string) error
 
 	// UnListen unsubscribes from notifications on the specified topic.
+	// It stops listening for notifications on the given topic.
+	// Returns an error if the unsubscription fails.
 	UnListen(ctx context.Context, topic string) error
 
 	// Blocking blocks until a notification is received or the context is canceled.
+	// It listens for notifications and sends them to the notifierChannel.
+	// Returns an error if one occurs or the context is canceled.
 	Blocking(ctx context.Context) error
 
 	// NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
+	// It uses the Blocking method internally and sends any encountered errors to the errorChannel.
+	// The method returns immediately after starting the goroutine.
 	NonBlocking(ctx context.Context)
 
-	// Wait waits for a single notification. It returns the notification or an error if one occurs.
+	// Wait waits for a single notification.
+	// It blocks until a notification is received or an error occurs.
+	// Returns the notification or an error if one occurs.
 	Wait(ctx context.Context) (*pgconn.Notification, error)
 
 	// NotificationChannel returns a channel for receiving notifications.
+	// Notifications are sent to this channel by the Blocking or NonBlocking methods.
 	NotificationChannel() chan *pgconn.Notification
 
 	// ErrorChannel returns a channel for receiving errors.
+	// Errors encountered during notification handling are sent to this channel.
 	ErrorChannel() chan error
 
+	// StopBlocking stops the blocking operation initiated by the Blocking method.
+	// It signals cancellation to stop the blocking operation.
+	StopBlocking()
+
 	// Close closes the notifier, unsubscribing from all topics and releasing resources.
+	// It signals cancellation to stop any running blocking operations, closes channels,
+	// and releases the connection back to the pool.
+	// Returns an error if any issues occur during the closure process.
 	Close(ctx context.Context) error
 }
 
@@ -45,6 +64,8 @@ type notifier struct {
 }
 
 // New creates a new notifier instance using the provided connection pool.
+// It acquires a connection from the pool and initializes the notifier instance.
+// Returns the notifier instance and an error if the connection acquisition fails.
 func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
@@ -60,6 +81,8 @@ func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 }
 
 // Listen subscribes to notifications on the specified topic.
+// It begins listening for notifications on the given topic.
+// Returns an error if the subscription fails.
 func (n *notifier) Listen(ctx context.Context, topic string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -105,8 +128,6 @@ func (n *notifier) NonBlocking(ctx context.Context) {
 // UnListen unsubscribes from notifications on the specified topic.
 // It also signals cancellation to any running blocking operations.
 func (n *notifier) UnListen(ctx context.Context, topic string) error {
-	n.cancel <- struct{}{}
-
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -132,11 +153,18 @@ func (n *notifier) ErrorChannel() chan error {
 	return n.errorChannel
 }
 
+// StopBlocking stops the blocking operation initiated by the Blocking method.
+// It signals cancellation to stop the blocking operation.
+func (n *notifier) StopBlocking() {
+	n.cancel <- struct{}{}
+}
+
 // Close closes the notifier, unsubscribing from all topics and releasing resources.
-// It signals cancellation to any running blocking operations, closes channels, and releases the connection.
+// It signals cancellation to stop any running blocking operations, closes channels,
+// and releases the connection back to the pool.
+// Returns an error if any issues occur during the closure process.
 func (n *notifier) Close(ctx context.Context) error {
 	n.cancel <- struct{}{}
-
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
