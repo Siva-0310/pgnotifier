@@ -99,19 +99,21 @@ func (n *notifier) Blocking(ctx context.Context) error {
 	defer n.mu.Unlock()
 
 	for {
-		notification, err := n.conn.Conn().WaitForNotification(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return err
-		}
-		n.notifierChannel <- notification
+
 		select {
 		case <-n.cancel:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
+		default:
+			notification, err := n.conn.Conn().WaitForNotification(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return err
+			}
+			n.notifierChannel <- notification
 		}
 	}
 }
