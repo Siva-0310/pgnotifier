@@ -14,7 +14,7 @@ The `pgnotifier` package provides a Go interface for handling PostgreSQL notific
 To install the `pgnotifier` package, run:
 
 ```sh
-go get github.com/yourusername/pgnotifier
+go get github.com/Siva-0310/pgnotifier
 ```
 
 ## Usage
