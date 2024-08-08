@@ -27,7 +27,7 @@ First, set up a PostgreSQL connection pool and create a new notifier instance.
 import (
     "context"
     "github.com/jackc/pgx/v5/pgxpool"
-    "github.com/yourusername/pgnotifier"
+    "github.com/Siva-0310/pgnotifier"
 )
 
 func main() {
@@ -147,7 +147,7 @@ import (
     "context"
     "fmt"
     "github.com/jackc/pgx/v5/pgxpool"
-    "github.com/yourusername/pgnotifier"
+    "github.com/Siva-0310/pgnotifier"
     "log"
 )
 
