@@ -45,7 +45,7 @@ func main() {
     if err != nil {
         panic(err)
     }
-    defer notifier.Close(ctx)
+    defer notifier.Close(ctx, "test_channel")
 }
 ```
 
@@ -116,7 +116,7 @@ if err != nil {
 Closes the notifier, unsubscribing from all topics and releasing resources.
 
 ```go
-err := notifier.Close(ctx)
+err := notifier.Close(ctx, "test_channel")
 if err != nil {
     panic(err)
 }
@@ -134,7 +134,7 @@ if err != nil {
 - **`NotificationChannel() chan *pgconn.Notification`**: Returns a channel for receiving notifications.
 - **`ErrorChannel() chan error`**: Returns a channel for receiving errors.
 - **`StopBlocking()`**: Stops the blocking operation.
-- **`Close(ctx context.Context) error`**: Closes the notifier, releasing resources.
+- **`Close(ctx context.Context, topic string) error`**: Closes the notifier, releasing resources.
 
 ## Example
 
@@ -166,7 +166,7 @@ func main() {
     if err != nil {
         log.Fatalf("Failed to create notifier: %v", err)
     }
-    defer notifier.Close(ctx)
+    defer notifier.Close(ctx, "test_channel")
 
     // Subscribe to a notification topic
     err = notifier.Listen(ctx, "test_channel")
@@ -205,6 +205,6 @@ func main() {
 
 Contributions are welcome! Please open an issue or submit a pull request on GitHub.
 
-<!-- ## License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details. -->
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

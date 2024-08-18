@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Notifier defines the interface for notification handling.
+// Notifier defines the interface for handling PostgreSQL notifications.
 type Notifier interface {
 	// Listen subscribes to notifications on the specified topic.
 	// It begins listening for notifications on the given topic.
@@ -21,8 +21,8 @@ type Notifier interface {
 	UnListen(ctx context.Context, topic string) error
 
 	// Blocking blocks until a notification is received or the context is canceled.
-	// It listens for notifications and sends them to the notifierChannel.
-	// Returns an error if one occurs or the context is canceled.
+	// Notifications are sent to the notifierChannel, and the method returns
+	// an error if one occurs or the context is canceled.
 	Blocking(ctx context.Context) error
 
 	// NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
@@ -82,7 +82,7 @@ func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 }
 
 // Listen subscribes to notifications on the specified topic.
-// It begins listening for notifications on the given topic.
+// It sends a SQL LISTEN command to the PostgreSQL server.
 // Returns an error if the subscription fails.
 func (n *notifier) Listen(ctx context.Context, topic string) error {
 	n.mu.Lock()
@@ -93,8 +93,8 @@ func (n *notifier) Listen(ctx context.Context, topic string) error {
 }
 
 // Blocking blocks until a notification is received or the context is canceled.
-// Notifications are sent to the notifierChannel, and the method returns
-// an error if one occurs or the context is canceled.
+// Notifications are sent to the notifierChannel. If the context is canceled,
+// it returns ctx.Err(), otherwise it returns any error encountered during notification reception.
 func (n *notifier) Blocking(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -103,7 +103,7 @@ func (n *notifier) Blocking(ctx context.Context) error {
 	n.cancel = cancel
 
 	for {
-		// WaitForNotification will block until a notification is received or the context is canceled
+		// WaitForNotification blocks until a notification is received or the context is canceled
 		notification, err := n.conn.Conn().WaitForNotification(ctx)
 		if err != nil {
 			// If context is canceled, err will be context.Canceled
@@ -117,7 +117,8 @@ func (n *notifier) Blocking(ctx context.Context) error {
 }
 
 // NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
-// Any errors encountered are sent to the errorChannel.
+// It uses the Blocking method internally and sends any encountered errors to the errorChannel.
+// The method returns immediately after starting the goroutine.
 func (n *notifier) NonBlocking(ctx context.Context) {
 	n.wg.Add(1)
 	go func() {
@@ -128,7 +129,8 @@ func (n *notifier) NonBlocking(ctx context.Context) {
 }
 
 // UnListen unsubscribes from notifications on the specified topic.
-// It also signals cancellation to any running blocking operations.
+// It sends a SQL UNLISTEN command to the PostgreSQL server and stops listening to the given topic.
+// Returns an error if the unsubscription fails.
 func (n *notifier) UnListen(ctx context.Context, topic string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -137,7 +139,9 @@ func (n *notifier) UnListen(ctx context.Context, topic string) error {
 	return err
 }
 
-// Wait waits for a single notification. It returns the notification or an error if one occurs.
+// Wait waits for a single notification.
+// It blocks until a notification is received or an error occurs.
+// Returns the notification or an error if one occurs.
 func (n *notifier) Wait(ctx context.Context) (*pgconn.Notification, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -146,17 +150,19 @@ func (n *notifier) Wait(ctx context.Context) (*pgconn.Notification, error) {
 }
 
 // NotificationChannel returns a channel for receiving notifications.
+// Notifications are sent to this channel by the Blocking or NonBlocking methods.
 func (n *notifier) NotificationChannel() chan *pgconn.Notification {
 	return n.notifierChannel
 }
 
 // ErrorChannel returns a channel for receiving errors.
+// Errors encountered during notification handling are sent to this channel.
 func (n *notifier) ErrorChannel() chan error {
 	return n.errorChannel
 }
 
 // StopBlocking stops the blocking operation initiated by the Blocking method.
-// It signals cancellation to stop the blocking operation.
+// It cancels the context used for blocking operations.
 func (n *notifier) StopBlocking() {
 	if n.cancel != nil {
 		n.cancel()
@@ -164,11 +170,9 @@ func (n *notifier) StopBlocking() {
 }
 
 // Close closes the notifier, unsubscribing from all topics and releasing resources.
-// It signals cancellation to stop any running blocking operations, closes channels,
-// and releases the connection back to the pool
+// It stops any running blocking operations, closes channels, and releases the connection back to the pool.
 // Returns an error if any issues occur during the closure process.
 func (n *notifier) Close(ctx context.Context, topic string) error {
-
 	n.StopBlocking()
 	n.wg.Wait()
 
