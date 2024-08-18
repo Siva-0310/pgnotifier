@@ -51,15 +51,16 @@ type Notifier interface {
 	// It signals cancellation to stop any running blocking operations, closes channels,
 	// and releases the connection back to the pool.
 	// Returns an error if any issues occur during the closure process.
-	Close(ctx context.Context) error
+	Close(ctx context.Context, topic string) error
 }
 
 // notifier implements the Notifier interface for handling PostgreSQL notifications.
 type notifier struct {
+	mu              sync.Mutex
+	wg              sync.WaitGroup
 	conn            *pgxpool.Conn
 	notifierChannel chan *pgconn.Notification
-	mu              sync.Mutex
-	cancel          chan struct{}
+	cancel          context.CancelFunc
 	errorChannel    chan error
 }
 
@@ -73,10 +74,10 @@ func New(ctx context.Context, pool *pgxpool.Pool) (Notifier, error) {
 	}
 	return &notifier{
 		conn:            conn,
-		notifierChannel: make(chan *pgconn.Notification),
 		mu:              sync.Mutex{},
+		wg:              sync.WaitGroup{},
+		notifierChannel: make(chan *pgconn.Notification),
 		errorChannel:    make(chan error, 1),
-		cancel:          make(chan struct{}, 1),
 	}, nil
 }
 
@@ -98,11 +99,11 @@ func (n *notifier) Blocking(ctx context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	for {
+	ctx, cancel := context.WithCancel(ctx)
+	n.cancel = cancel
 
+	for {
 		select {
-		case <-n.cancel:
-			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
@@ -121,7 +122,9 @@ func (n *notifier) Blocking(ctx context.Context) error {
 // NonBlocking starts a goroutine that listens for notifications in a non-blocking manner.
 // Any errors encountered are sent to the errorChannel.
 func (n *notifier) NonBlocking(ctx context.Context) {
+	n.wg.Add(1)
 	go func() {
+		defer n.wg.Done()
 		err := n.Blocking(ctx)
 		n.errorChannel <- err
 	}()
@@ -158,15 +161,24 @@ func (n *notifier) ErrorChannel() chan error {
 // StopBlocking stops the blocking operation initiated by the Blocking method.
 // It signals cancellation to stop the blocking operation.
 func (n *notifier) StopBlocking() {
-	n.cancel <- struct{}{}
+	if n.cancel != nil {
+		n.cancel()
+	}
 }
 
 // Close closes the notifier, unsubscribing from all topics and releasing resources.
 // It signals cancellation to stop any running blocking operations, closes channels,
-// and releases the connection back to the pool.
+// and releases the connection back to the pool
 // Returns an error if any issues occur during the closure process.
-func (n *notifier) Close(ctx context.Context) error {
-	n.cancel <- struct{}{}
+func (n *notifier) Close(ctx context.Context, topic string) error {
+
+	n.StopBlocking()
+	n.wg.Wait()
+
+	if err := n.UnListen(ctx, topic); err != nil {
+		return err
+	}
+
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
