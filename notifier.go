@@ -103,19 +103,16 @@ func (n *notifier) Blocking(ctx context.Context) error {
 	n.cancel = cancel
 
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			notification, err := n.conn.Conn().WaitForNotification(ctx)
-			if err != nil {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return err
+		// WaitForNotification will block until a notification is received or the context is canceled
+		notification, err := n.conn.Conn().WaitForNotification(ctx)
+		if err != nil {
+			// If context is canceled, err will be context.Canceled
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
-			n.notifierChannel <- notification
+			return err
 		}
+		n.notifierChannel <- notification
 	}
 }
 
